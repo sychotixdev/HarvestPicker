@@ -5,18 +5,18 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Text;
 using System.Threading.Tasks;
 using ExileCore;
 using ExileCore.PoEMemory.Components;
 using ExileCore.PoEMemory.MemoryObjects;
 using ExileCore.Shared.Enums;
-using HarvestPicker.Api.Request;
 using HarvestPicker.Api.Response;
 using Newtonsoft.Json;
 using SharpDX;
 using Vector2 = System.Numerics.Vector2;
 using static MoreLinq.Extensions.PermutationsExtension;
+using System.Web;
+using System.Collections.Specialized;
 
 namespace HarvestPicker;
 
@@ -30,9 +30,6 @@ public class HarvestPrices
 
 public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
 {
-    private const string DefaultQuery =
-        "query Query($search: LivePricingSummarySearch!) {livePricingSummarySearch(search: $search) {entries {itemGroup {key}valuation{value}}}}";
-
     public override bool Initialise()
     {
         _pricesGetter = LoadPricesFromDisk();
@@ -85,33 +82,29 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         {
             Log("Starting data update");
             using var client = new HttpClient();
-            var response = await client.PostAsync("https://api.poestack.com/graphql",
-                new StringContent(JsonConvert.SerializeObject(new RequestRoot
-                {
-                    operationName = "Query",
-                    variables = new Variables
-                    {
-                        search = new Search
-                        {
-                            league = Settings.League ?? throw new Exception("Please configure the league"),
-                            offSet = 0,
-                            searchString = "lifeforce",
-                            quantityMin = 1,
-                            tag = "currency",
-                        },
-                    },
-                    query = DefaultQuery,
-                }), Encoding.Default, "application/json"));
-            response.EnsureSuccessStatusCode();
-            var str = await response.Content.ReadAsStringAsync();
-            var responseObject = JsonConvert.DeserializeObject<ResponseRoot>(str);
-            if (responseObject.errors != null)
-            {
-                Log($"Request returned errors: {responseObject.errors}");
-                throw new Exception("Request returned errors");
-            }
 
-            var dataMap = responseObject.data.livePricingSummarySearch.entries.ToDictionary(x => x.itemGroup.key, x => (float?)x.valuation.value);
+            var query = HttpUtility.ParseQueryString("");
+            query["league"] = Settings.League.Value;
+            query["type"] = "Currency";
+
+            UriBuilder builder = new UriBuilder();
+            builder.Path = "/api/data/currencyoverview";
+            builder.Host = "poe.ninja";
+            builder.Scheme = "https";
+            builder.Query = query.ToString();
+
+            string uri = builder.ToString();
+
+            var request = client.GetAsync(uri);
+            Log($"Fetching data from poe.ninja with url: {uri}");
+
+            var response = await request;
+            response.EnsureSuccessStatusCode();
+
+            var str = await response.Content.ReadAsStringAsync();
+            var responseObject = JsonConvert.DeserializeObject<PoeNinjaCurrencyResponse>(str);
+
+            var dataMap = responseObject.Lines.ToDictionary(x => x.CurrencyTypeName, x => (float?)x.ChaosEquivalent);
             if (dataMap.Any(x => x.Value is 0 or null) || dataMap.Count < 4)
             {
                 Log($"Some data is missing: {str}");
@@ -119,10 +112,10 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
 
             _prices = new HarvestPrices
             {
-                BlueJuiceValue = dataMap.GetValueOrDefault("primal crystallised lifeforce") ?? 0,
-                YellowJuiceValue = dataMap.GetValueOrDefault("vivid crystallised lifeforce") ?? 0,
-                PurpleJuiceValue = dataMap.GetValueOrDefault("wild crystallised lifeforce") ?? 0,
-                WhiteJuiceValue = dataMap.GetValueOrDefault("sacred crystallised lifeforce") ?? 0,
+                BlueJuiceValue = dataMap.GetValueOrDefault("Primal Crystallised Lifeforce") ?? 0,
+                YellowJuiceValue = dataMap.GetValueOrDefault("Vivid Crystallised Lifeforce") ?? 0,
+                PurpleJuiceValue = dataMap.GetValueOrDefault("Wild Crystallised Lifeforce") ?? 0,
+                WhiteJuiceValue = dataMap.GetValueOrDefault("Sacred Crystallised Lifeforce") ?? 0,
             };
             await File.WriteAllTextAsync(CachePath, JsonConvert.SerializeObject(_prices));
             Log("Data update complete");
@@ -341,7 +334,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         };
 
         var seeds = harvest.Seeds;
-        if (seeds.Any(x => x.Seed == null))
+        if (seeds.Exists(x => x.Seed == null))
         {
             Log("Some seeds have no associated dat file");
             return 0;
