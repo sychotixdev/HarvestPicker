@@ -9,6 +9,6 @@ public class Line
     public SparkLine ReceiveSparkLine { get; set; }
     public SparkLine LowConfidencePaySparkLine { get; set; }
     public SparkLine LowConfidenceReceiveSparkLine { get; set; }
-    public double ChaosEquivalent { get; set; }
+    public double? ChaosEquivalent { get; set; }
     public string DetailsId { get; set; }
 }

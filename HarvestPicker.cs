@@ -16,7 +16,6 @@ using SharpDX;
 using Vector2 = System.Numerics.Vector2;
 using static MoreLinq.Extensions.PermutationsExtension;
 using System.Web;
-using System.Collections.Specialized;
 
 namespace HarvestPicker;
 
@@ -32,8 +31,8 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
 {
     public override bool Initialise()
     {
-        _pricesGetter = LoadPricesFromDisk();
-        Settings.ReloadPrices.OnPressed = () => { _pricesGetter = LoadPricesFromDisk(); };
+        _pricesGetter = LoadPricesFromDisk(false);
+        Settings.ReloadPrices.OnPressed = () => { _pricesGetter = LoadPricesFromDisk(true); };
         return true;
     }
 
@@ -51,7 +50,29 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         _lastSeedData = null;
         _cropRotationPath = null;
         _cropRotationValue = 0;
-        _irrigatorPairs = new List<((Entity, double), (Entity, double))>();
+        _irrigatorPairs = [];
+        Settings.League.Values = (Settings.League.Values ?? []).Union([PlayerLeague, "Standard", "Hardcore"]).Where(x => x != null).ToList();
+    }
+
+    private string PlayerLeague
+    {
+        get
+        {
+            var playerLeague = GameController.IngameState.ServerData.League;
+            if (string.IsNullOrWhiteSpace(playerLeague))
+            {
+                playerLeague = null;
+            }
+            else
+            {
+                if (playerLeague.StartsWith("SSF "))
+                {
+                    playerLeague = playerLeague["SSF ".Length..];
+                }
+            }
+
+            return playerLeague;
+        }
     }
 
     private HarvestPrices Prices
@@ -104,7 +125,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             var str = await response.Content.ReadAsStringAsync();
             var responseObject = JsonConvert.DeserializeObject<PoeNinjaCurrencyResponse>(str);
 
-            var dataMap = responseObject.Lines.ToDictionary(x => x.CurrencyTypeName, x => (float?)x.ChaosEquivalent);
+            var dataMap = responseObject.Lines.ToDictionary(x => x.CurrencyTypeName, x => responseObject.FindLine(x)?.ChaosEquivalent);
             if (dataMap.Any(x => x.Value is 0 or null) || dataMap.Count < 4)
             {
                 Log($"Some data is missing: {str}");
@@ -130,7 +151,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         }
     }
 
-    private async Task LoadPricesFromDisk()
+    private async Task LoadPricesFromDisk(bool force)
     {
         await Task.Yield();
         try
@@ -141,14 +162,22 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             {
                 _prices = JsonConvert.DeserializeObject<HarvestPrices>(await File.ReadAllTextAsync(cachePath));
                 Log("Data loaded from disk");
-                if (DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath) < TimeSpan.FromMinutes(Settings.PriceRefreshPeriodMinutes))
+                if (force)
                 {
-                    _lastRetrieveStopwatch.Restart();
+                    _lastRetrieveStopwatch.Reset();
+                }
+                else
+                {
+                    if (DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath) < TimeSpan.FromMinutes(Settings.PriceRefreshPeriodMinutes))
+                    {
+                        _lastRetrieveStopwatch.Restart();
+                    }
                 }
             }
             else
             {
                 Log("Cached data doesn't exist");
+                _lastRetrieveStopwatch.Reset();
             }
         }
         catch (Exception ex)
