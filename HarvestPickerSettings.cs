@@ -15,6 +15,7 @@ public class HarvestPickerSettings : ISettings
 
     [JsonIgnore]
     public ButtonNode ReloadPrices { get; set; } = new ButtonNode();
+    public ToggleNode DrawRotationOnMap { get; set; } = new ToggleNode(true);
 
     public ColorNode BadColor { get; set; } = new ColorNode(Color.Red);
     public ColorNode NeutralColor { get; set; } = new ColorNode(Color.Yellow);
