@@ -420,16 +420,70 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             }
         }
 
-        if (_cropRotationPath is { } path)
+        void DrawIndex(Entity entity, Color color, int size, string text)
         {
-            for (int i = 0; i < path.Count; i++)
+            if (GameController.IngameState.IngameUi.Map.LargeMap.IsVisibleLocal)
             {
-                var entity = path[i];
-                var text = $"CR: this is your choice index {i}. Total EV: {_cropRotationValue:F1}";
-                var textPosition = GameController.IngameState.Camera.WorldToScreen(entity.PosNum) + new Vector2(0, Graphics.MeasureText("V").Y);
-                Graphics.DrawBox(textPosition, textPosition + Graphics.MeasureText(text), Color.Black);
-                Graphics.DrawText(text, textPosition, i == 0 ? Settings.GoodColor : Settings.NeutralColor);
+               
+                var mapPos = GameController.IngameState.Data.GetGridMapScreenPosition(entity.PosNum.WorldToGrid());
+                mapPos = mapPos + new Vector2(0, 10);
+                if (text != null)
+                {
+                    var widthPadding = 3;
+                    var boxOffset = Graphics.MeasureText(text) / 2f;
+                    var textOffset = boxOffset;
+
+                    boxOffset.X += widthPadding;
+
+                    Graphics.DrawBox(mapPos - boxOffset, mapPos + boxOffset, Color.Black);
+                    Graphics.DrawText(text, mapPos - textOffset, color);
+                }
+                else
+                {
+                    Graphics.DrawBox(new RectangleF(mapPos.X - size / 2, mapPos.Y - size / 2, size, size), color, 1f);
+                }
+                
             }
         }
+
+ void DrawIndex(Entity entity, Color color, int size, string text)
+ {
+     if (Settings.DrawRotationOnMap && GameController.IngameState.IngameUi.Map.LargeMap.IsVisibleLocal)
+     {
+        
+         var mapPos = GameController.IngameState.Data.GetGridMapScreenPosition(entity.PosNum.WorldToGrid());
+         mapPos = mapPos + new Vector2(0, 10);
+         if (text != null)
+         {
+             var widthPadding = 3;
+             var boxOffset = Graphics.MeasureText(text) / 2f;
+             var textOffset = boxOffset;
+
+             boxOffset.X += widthPadding;
+
+             Graphics.DrawBox(mapPos - boxOffset, mapPos + boxOffset, Color.Black);
+             Graphics.DrawText(text, mapPos - textOffset, color);
+         }
+         else
+         {
+             Graphics.DrawBox(new RectangleF(mapPos.X - size / 2, mapPos.Y - size / 2, size, size), color, 1f);
+         }
+         
+     }
+ }
+
+ if (_cropRotationPath is { } path)
+ {
+     for (int i = 0; i < path.Count; i++)
+     {
+         var entity = path[i];
+         var text = $"CR: this is your choice index {i}. Total EV: {_cropRotationValue:F1}";
+         var textPosition = GameController.IngameState.Camera.WorldToScreen(entity.PosNum) + new Vector2(0, Graphics.MeasureText("V").Y);
+         Graphics.DrawBox(textPosition, textPosition + Graphics.MeasureText(text), Color.Black);
+         Graphics.DrawText(text, textPosition, i == 0 ? Settings.GoodColor : Settings.NeutralColor);
+
+         DrawIndex(entity, i == 0 ? Settings.GoodColor : Settings.NeutralColor, 12, i.ToString());
+     }
+ }
     }
 }
