@@ -303,19 +303,28 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         // Calculate expected values for choosing plot1
         var upgradedPath1 = ApplyUpgradeToRemainingPath(remainingPath, currentIndex + 1, currentPair.Plot1.Data.Type, upgradeFunc);
         var futureValue1Normal = CalculateExpectedValueRecursive(upgradedPath1, currentIndex + 1, upgradeFunc);
-        var futureValue1WithBonus = plot2Value + CalculateExpectedValueRecursive(upgradedPath1, currentIndex + 1, upgradeFunc);
+
+        // For the bonus case (plot2 doesn't wilt), we harvest plot2 next with upgrades from plot1
+        var plot2AfterPlot1Upgrade = upgradeFunc(currentPair.Plot2.Data, currentPair.Plot1.Data.Type);
+        var plot2UpgradedValue = CalculateIrrigatorValue(plot2AfterPlot1Upgrade);
+        var pathAfterBothHarvests = ApplyUpgradeToRemainingPath(upgradedPath1, currentIndex + 1, plot2AfterPlot1Upgrade.Type, upgradeFunc);
+        var futureValue1WithBonus = plot2UpgradedValue + CalculateExpectedValueRecursive(pathAfterBothHarvests, currentIndex + 1, upgradeFunc);
 
         // Calculate expected values for choosing plot2
         var upgradedPath2 = ApplyUpgradeToRemainingPath(remainingPath, currentIndex + 1, currentPair.Plot2.Data.Type, upgradeFunc);
         var futureValue2Normal = CalculateExpectedValueRecursive(upgradedPath2, currentIndex + 1, upgradeFunc);
-        var futureValue2WithBonus = plot1Value + CalculateExpectedValueRecursive(upgradedPath2, currentIndex + 1, upgradeFunc);
+
+        // For the bonus case (plot1 doesn't wilt), we harvest plot1 next with upgrades from plot2
+        var plot1AfterPlot2Upgrade = upgradeFunc(currentPair.Plot1.Data, currentPair.Plot2.Data.Type);
+        var plot1UpgradedValue = CalculateIrrigatorValue(plot1AfterPlot2Upgrade);
+        var pathAfterBothHarvests2 = ApplyUpgradeToRemainingPath(upgradedPath2, currentIndex + 1, plot1AfterPlot2Upgrade.Type, upgradeFunc);
+        var futureValue2WithBonus = plot1UpgradedValue + CalculateExpectedValueRecursive(pathAfterBothHarvests2, currentIndex + 1, upgradeFunc);
 
         // Calculate expected values considering wilt probability
-        // Get chance for crops to not wilt
-        var chanceToWither = (1.0 * GameController.IngameState.Data.MapStats.GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct)) / 100;
-        var wiltChance = 1.0 - chanceToWither;
-        var expectedValue1 = plot1Value + (wiltChance * futureValue1Normal) + (chanceToWither * futureValue1WithBonus);
-        var expectedValue2 = plot2Value + (wiltChance * futureValue2Normal) + (chanceToWither * futureValue2WithBonus);
+        var chanceToNotWither = (1.0 * GameController.IngameState.Data.MapStats.GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct)) / 100;
+        var wiltChance = 1.0 - chanceToNotWither;
+        var expectedValue1 = plot1Value + (wiltChance * futureValue1Normal) + (chanceToNotWither * futureValue1WithBonus);
+        var expectedValue2 = plot2Value + (wiltChance * futureValue2Normal) + (chanceToNotWither * futureValue2WithBonus);
 
         return Math.Max(expectedValue1, expectedValue2);
     }
@@ -344,18 +353,30 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             var plot1Value = CalculateIrrigatorValue(currentPair.Plot1.Data);
             var plot2Value = CalculateIrrigatorValue(currentPair.Plot2.Data);
 
+            // Calculate expected values for choosing plot1
             var upgradedPath1 = ApplyUpgradeToRemainingPath(currentPath, i + 1, currentPair.Plot1.Data.Type, upgradeFunc);
             var futureValue1Normal = CalculateExpectedValueRecursive(upgradedPath1, i + 1, upgradeFunc);
-            var futureValue1WithBonus = plot2Value + CalculateExpectedValueRecursive(upgradedPath1, i + 1, upgradeFunc);
 
+            // For bonus case: harvest plot2 after plot1 with upgrades
+            var plot2AfterPlot1Upgrade = upgradeFunc(currentPair.Plot2.Data, currentPair.Plot1.Data.Type);
+            var plot2UpgradedValue = CalculateIrrigatorValue(plot2AfterPlot1Upgrade);
+            var pathAfterBothHarvests = ApplyUpgradeToRemainingPath(upgradedPath1, i + 1, plot2AfterPlot1Upgrade.Type, upgradeFunc);
+            var futureValue1WithBonus = plot2UpgradedValue + CalculateExpectedValueRecursive(pathAfterBothHarvests, i + 1, upgradeFunc);
+
+            // Calculate expected values for choosing plot2
             var upgradedPath2 = ApplyUpgradeToRemainingPath(currentPath, i + 1, currentPair.Plot2.Data.Type, upgradeFunc);
             var futureValue2Normal = CalculateExpectedValueRecursive(upgradedPath2, i + 1, upgradeFunc);
-            var futureValue2WithBonus = plot1Value + CalculateExpectedValueRecursive(upgradedPath2, i + 1, upgradeFunc);
 
-            var chanceToWither = (1.0 * GameController.IngameState.Data.MapStats.GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct)) / 100;
-            var wiltChance = 1.0 - chanceToWither;
-            var expectedValue1 = plot1Value + (wiltChance * futureValue1Normal) + (chanceToWither * futureValue1WithBonus);
-            var expectedValue2 = plot2Value + (wiltChance * futureValue2Normal) + (chanceToWither * futureValue2WithBonus);
+            // For bonus case: harvest plot1 after plot2 with upgrades
+            var plot1AfterPlot2Upgrade = upgradeFunc(currentPair.Plot1.Data, currentPair.Plot2.Data.Type);
+            var plot1UpgradedValue = CalculateIrrigatorValue(plot1AfterPlot2Upgrade);
+            var pathAfterBothHarvests2 = ApplyUpgradeToRemainingPath(upgradedPath2, i + 1, plot1AfterPlot2Upgrade.Type, upgradeFunc);
+            var futureValue2WithBonus = plot1UpgradedValue + CalculateExpectedValueRecursive(pathAfterBothHarvests2, i + 1, upgradeFunc);
+
+            var chanceToNotWither = (1.0 * GameController.IngameState.Data.MapStats.GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct)) / 100;
+            var wiltChance = 1.0 - chanceToNotWither;
+            var expectedValue1 = plot1Value + (wiltChance * futureValue1Normal) + (chanceToNotWither * futureValue1WithBonus);
+            var expectedValue2 = plot2Value + (wiltChance * futureValue2Normal) + (chanceToNotWither * futureValue2WithBonus);
 
             if (expectedValue1 >= expectedValue2)
             {
