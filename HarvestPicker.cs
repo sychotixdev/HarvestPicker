@@ -222,7 +222,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         if (GameController.IngameState.Data.MapStats.GetValueOrDefault(
                 GameStat.MapHarvestSeedsOfOtherColoursHaveChanceToUpgradeOnCompletingPlot) != 0)
         {
-            //crop rotation
+            //crop rotation with weighted risk calculation
             List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> irrigatorSeedDataPairs =
                 irrigatorPairs.Select(p => (
                         (ExtractSeedData(p.Item1.Item1), p.Item1.Item1),
@@ -242,54 +242,167 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                         source.T3Plants * (1 - Settings.CropRotationT3UpgradeChance) + source.T2Plants * Settings.CropRotationT2UpgradeChance,
                         source.T4Plants + source.T3Plants * Settings.CropRotationT3UpgradeChance);
 
-
-                double maxValue = double.NegativeInfinity;
+                double maxExpectedValue = double.NegativeInfinity;
                 List<Entity> selectedPath = null;
 
                 foreach (var pairPermutation in irrigatorSeedDataPairs.Permutations())
                 {
-                    var choices = new List<ImmutableList<bool>> { ImmutableList<bool>.Empty };
-                    foreach (var irrigatorSeedDataPair in pairPermutation)
+                    var expectedValue = CalculateExpectedValueForPath(pairPermutation.ToList(), Upgrade);
+                    if (expectedValue > maxExpectedValue)
                     {
-                        choices = irrigatorSeedDataPair.Plot2.Data == null
-                            ? choices.Select(x => x.Add(false)).ToList()
-                            : choices.SelectMany(x => new[] { x.Add(false), x.Add(true) }).ToList();
+                        maxExpectedValue = expectedValue;
+                        selectedPath = GetOptimalChoicesForPath(pairPermutation.ToList(), Upgrade);
                     }
-
-
-                    foreach (var choice in choices.Select(x => x))
-                    {
-                        var iterationSeedDataPairs = pairPermutation.Reverse().ToList();
-                        var actuallyPickedPlants = new List<(SeedData Data, Entity Entity)>();
-                        foreach (var choiceItem in choice)
-                        {
-                            var pair = iterationSeedDataPairs.Last();
-                            iterationSeedDataPairs.RemoveAt(iterationSeedDataPairs.Count - 1);
-                            var completedPair = choiceItem ? pair.Plot2 : pair.Plot1;
-                            iterationSeedDataPairs = iterationSeedDataPairs.Select(x => (
-                                (Upgrade(x.Plot1.Data, completedPair.Data.Type), x.Plot1.Entity),
-                                (Upgrade(x.Plot2.Data, completedPair.Data.Type), x.Plot2.Entity)
-                            )).ToList();
-                            actuallyPickedPlants.Add(completedPair);
-                        }
-
-                        var value = actuallyPickedPlants.Select(x => x.Data).Sum(CalculateIrrigatorValue);
-                        if (value > maxValue)
-                        {
-                            maxValue = value;
-                            selectedPath = pairPermutation.Zip(choice, (pair, c) => c ? pair.Plot2.Entity : pair.Plot1.Entity).ToList();
-                        }
-                    }
-
-
-                    _cropRotationPath = selectedPath;
-                    _cropRotationValue = maxValue;
-                    _lastSeedData = currentSet;
                 }
+
+                _cropRotationPath = selectedPath;
+                _cropRotationValue = maxExpectedValue;
+                _lastSeedData = currentSet;
             }
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Calculate the expected value for a given path considering the probability of crops not wilting
+    /// </summary>
+    private double CalculateExpectedValueForPath(
+        List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> path,
+        Func<SeedData, int, SeedData> upgradeFunc)
+    {
+        return CalculateExpectedValueRecursive(path, 0, upgradeFunc);
+    }
+
+    /// <summary>
+    /// Recursively calculate expected value considering all possible outcomes
+    /// </summary>
+    private double CalculateExpectedValueRecursive(
+        List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> remainingPath,
+        int currentIndex,
+        Func<SeedData, int, SeedData> upgradeFunc)
+    {
+        if (currentIndex >= remainingPath.Count)
+            return 0;
+
+        var currentPair = remainingPath[currentIndex];
+
+        // If there's only one plot in this pair, we must choose it
+        if (currentPair.Plot2.Data == null)
+        {
+            var chosenValue = CalculateIrrigatorValue(currentPair.Plot1.Data);
+            var upgradedPath = ApplyUpgradeToRemainingPath(remainingPath, currentIndex + 1, currentPair.Plot1.Data.Type, upgradeFunc);
+            var futureValue = CalculateExpectedValueRecursive(upgradedPath, currentIndex + 1, upgradeFunc);
+            return chosenValue + futureValue;
+        }
+
+        // Calculate values for both choices
+        var plot1Value = CalculateIrrigatorValue(currentPair.Plot1.Data);
+        var plot2Value = CalculateIrrigatorValue(currentPair.Plot2.Data);
+
+        // Calculate expected values for choosing plot1
+        var upgradedPath1 = ApplyUpgradeToRemainingPath(remainingPath, currentIndex + 1, currentPair.Plot1.Data.Type, upgradeFunc);
+        var futureValue1Normal = CalculateExpectedValueRecursive(upgradedPath1, currentIndex + 1, upgradeFunc);
+        var futureValue1WithBonus = plot2Value + CalculateExpectedValueRecursive(upgradedPath1, currentIndex + 1, upgradeFunc);
+
+        // Calculate expected values for choosing plot2
+        var upgradedPath2 = ApplyUpgradeToRemainingPath(remainingPath, currentIndex + 1, currentPair.Plot2.Data.Type, upgradeFunc);
+        var futureValue2Normal = CalculateExpectedValueRecursive(upgradedPath2, currentIndex + 1, upgradeFunc);
+        var futureValue2WithBonus = plot1Value + CalculateExpectedValueRecursive(upgradedPath2, currentIndex + 1, upgradeFunc);
+
+        // Calculate expected values considering wilt probability
+        // Get chance for crops to not wilt
+        var chanceToWither = (1.0 * GameController.IngameState.Data.MapStats.GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct)) / 100;
+        var wiltChance = 1.0 - chanceToWither;
+        var expectedValue1 = plot1Value + (wiltChance * futureValue1Normal) + (chanceToWither * futureValue1WithBonus);
+        var expectedValue2 = plot2Value + (wiltChance * futureValue2Normal) + (chanceToWither * futureValue2WithBonus);
+
+        return Math.Max(expectedValue1, expectedValue2);
+    }
+
+    /// <summary>
+    /// Get the optimal choices for a given path
+    /// </summary>
+    private List<Entity> GetOptimalChoicesForPath(
+        List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> path,
+        Func<SeedData, int, SeedData> upgradeFunc)
+    {
+        var choices = new List<Entity>();
+        var currentPath = path.ToList();
+
+        for (int i = 0; i < path.Count; i++)
+        {
+            var currentPair = currentPath[i];
+
+            if (currentPair.Plot2.Data == null)
+            {
+                choices.Add(currentPair.Plot1.Entity);
+                continue;
+            }
+
+            // Calculate expected values for both choices
+            var plot1Value = CalculateIrrigatorValue(currentPair.Plot1.Data);
+            var plot2Value = CalculateIrrigatorValue(currentPair.Plot2.Data);
+
+            var upgradedPath1 = ApplyUpgradeToRemainingPath(currentPath, i + 1, currentPair.Plot1.Data.Type, upgradeFunc);
+            var futureValue1Normal = CalculateExpectedValueRecursive(upgradedPath1, i + 1, upgradeFunc);
+            var futureValue1WithBonus = plot2Value + CalculateExpectedValueRecursive(upgradedPath1, i + 1, upgradeFunc);
+
+            var upgradedPath2 = ApplyUpgradeToRemainingPath(currentPath, i + 1, currentPair.Plot2.Data.Type, upgradeFunc);
+            var futureValue2Normal = CalculateExpectedValueRecursive(upgradedPath2, i + 1, upgradeFunc);
+            var futureValue2WithBonus = plot1Value + CalculateExpectedValueRecursive(upgradedPath2, i + 1, upgradeFunc);
+
+            var chanceToWither = (1.0 * GameController.IngameState.Data.MapStats.GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct)) / 100;
+            var wiltChance = 1.0 - chanceToWither;
+            var expectedValue1 = plot1Value + (wiltChance * futureValue1Normal) + (chanceToWither * futureValue1WithBonus);
+            var expectedValue2 = plot2Value + (wiltChance * futureValue2Normal) + (chanceToWither * futureValue2WithBonus);
+
+            if (expectedValue1 >= expectedValue2)
+            {
+                choices.Add(currentPair.Plot1.Entity);
+                currentPath = upgradedPath1;
+            }
+            else
+            {
+                choices.Add(currentPair.Plot2.Entity);
+                currentPath = upgradedPath2;
+            }
+        }
+
+        return choices;
+    }
+
+    /// <summary>
+    /// Apply upgrade effects to the remaining path based on the chosen crop type
+    /// </summary>
+    private List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> ApplyUpgradeToRemainingPath(
+        List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> originalPath,
+        int startIndex,
+        int upgradeType,
+        Func<SeedData, int, SeedData> upgradeFunc)
+    {
+        var upgradedPath = new List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)>();
+
+        for (int i = 0; i < originalPath.Count; i++)
+        {
+            if (i < startIndex)
+            {
+                upgradedPath.Add(originalPath[i]);
+            }
+            else
+            {
+                var originalPair = originalPath[i];
+                var upgradedPair = (
+                    (upgradeFunc(originalPair.Plot1.Data, upgradeType), originalPair.Plot1.Entity),
+                    originalPair.Plot2.Data != null ?
+                        (upgradeFunc(originalPair.Plot2.Data, upgradeType), originalPair.Plot2.Entity) :
+                        (null, originalPair.Plot2.Entity)
+                );
+                upgradedPath.Add(upgradedPair);
+            }
+        }
+
+        return upgradedPath;
     }
 
     private record SeedData(int Type, float T1Plants, float T2Plants, float T3Plants, float T4Plants);
