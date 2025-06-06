@@ -269,11 +269,11 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                 var maxPermutations = seedPlots.Count switch
                 {
                     <= 4 => int.MaxValue, // Small enough to try all
-                    5 => 120,             // 5! = 120, try all
-                    6 => 720,             // 6! = 720, try all  
-                    7 => 5040,            // 7! = 5040, limit to 1000
-                    8 => 40320,            // 8! = 40320, limit to 2000
-                    _ => 100000             // 9+ crops, limit heavily
+                    5 => 120,             // 5! = 120
+                    6 => 720,             // 6! = 720 
+                    7 => 5040,            // 7! = 5040
+                    8 => 40320,            // 8! = 40320
+                    _ => 3628800             // 10! = 3628800
                 };
 
                 double maxExpectedValue = double.NegativeInfinity;
