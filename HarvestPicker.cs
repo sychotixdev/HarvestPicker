@@ -47,7 +47,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
     private double _cropRotationValue;
     private HashSet<SeedData> _lastSeedData;
     private string CachePath => Path.Join(ConfigDirectory, "pricecache.json");
-    // Add this field to your HarvestPicker class
+
     private MemoizedHarvestCalculator _harvestCalculator;
 
     public override void AreaChange(AreaInstance area)
