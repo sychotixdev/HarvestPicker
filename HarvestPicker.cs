@@ -477,51 +477,66 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
     }
 
     private IEnumerable<List<(SeedData Data, Entity Entity)>> GeneratePrioritizedPermutations(
-        List<(SeedData Data, Entity Entity)> seedPlots,
-        List<((Entity, double), (Entity, double))> irrigatorPairs)
+    List<(SeedData Data, Entity Entity)> seedPlots,
+    List<((Entity, double), (Entity, double))> irrigatorPairs)
     {
+        // Get the prioritized sequence of entities (this is our starting point order)
         var prioritizedSequence = GeneratePrioritizedStartingSequence(seedPlots, irrigatorPairs);
 
-        // Convert entity sequence back to (SeedData, Entity) format
-        var prioritizedSeedPlots = prioritizedSequence
-            .Select(entity => seedPlots.First(plot => plot.Entity == entity))
-            .ToList();
+        // Convert to lookup for quick access
+        var entityToSeedPlot = seedPlots.ToDictionary(plot => plot.Entity, plot => plot);
 
-        // Yield the prioritized sequence first
-        yield return prioritizedSeedPlots;
+        int permutationCount = 0;
 
-        // Then generate other permutations starting from the prioritized base
-        // This gives preference to sequences that start with low-priority (low-value) crops
-        foreach (var permutation in GeneratePermutationsStartingWith(prioritizedSeedPlots))
+        // Iterate through each entity in priority order as a starting point
+        foreach (var startingEntity in prioritizedSequence)
         {
-            yield return permutation;
+            Log($"Evaluating sequence for {startingEntity.Address} At {permutationCount}/{Settings.MaxPermutations.Value} permutations.");
+
+            // Get the remaining entities (all except the starting one)
+            var remainingEntities = prioritizedSequence.Where(e => e != startingEntity).ToList();
+
+            // Generate all permutations that start with this entity
+            foreach (var remainingPermutation in GenerateAllPermutations(remainingEntities))
+            {
+                if (++permutationCount > Settings.MaxPermutations)
+                {
+                    Log($"Reached permutation limit of {Settings.MaxPermutations}");
+                    yield break; // Stop generating more permutations
+                }
+
+                // Build the complete sequence: starting entity + remaining permutation
+                var completeSequence = new List<Entity> { startingEntity };
+                completeSequence.AddRange(remainingPermutation);
+
+                // Convert back to (SeedData, Entity) format
+                var seedPlotSequence = completeSequence.Select(entity => entityToSeedPlot[entity]).ToList();
+
+                yield return seedPlotSequence;
+            }
         }
     }
 
-    private IEnumerable<List<T>> GeneratePermutationsStartingWith<T>(List<T> baseSequence)
+    // Helper method to generate all permutations of a list
+    private IEnumerable<List<T>> GenerateAllPermutations<T>(List<T> items)
     {
-        // Generate permutations but bias toward keeping the first few elements in place
-        var count = baseSequence.Count;
-
-        // Start with the exact sequence
-        yield return new List<T>(baseSequence);
-
-        // Generate permutations with increasing randomness
-        for (int swapDistance = 1; swapDistance < count; swapDistance++)
+        if (items.Count <= 1)
         {
-            for (int i = 0; i < count - swapDistance; i++)
-            {
-                var permuted = new List<T>(baseSequence);
-                // Swap elements that are swapDistance apart
-                (permuted[i], permuted[i + swapDistance]) = (permuted[i + swapDistance], permuted[i]);
-                yield return permuted;
-            }
+            yield return new List<T>(items);
+            yield break;
         }
 
-        // Fall back to regular permutations for completeness
-        foreach (var permutation in baseSequence.Permutations().Skip(1)) // Skip first as we already yielded it
+        for (int i = 0; i < items.Count; i++)
         {
-            yield return permutation.ToList();
+            var current = items[i];
+            var remaining = items.Where((item, index) => index != i).ToList();
+
+            foreach (var permutation in GenerateAllPermutations(remaining))
+            {
+                var result = new List<T> { current };
+                result.AddRange(permutation);
+                yield return result;
+            }
         }
     }
 
