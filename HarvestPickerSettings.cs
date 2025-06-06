@@ -1,4 +1,4 @@
-﻿using ExileCore.Shared.Interfaces;
+using ExileCore.Shared.Interfaces;
 using ExileCore.Shared.Nodes;
 using Newtonsoft.Json;
 using SharpDX;
@@ -30,4 +30,6 @@ public class HarvestPickerSettings : ISettings
     public RangeNode<float> CropRotationT1UpgradeChance { get; set; } = new RangeNode<float>(0.33f, 0, 1f);
     public RangeNode<float> CropRotationT2UpgradeChance { get; set; } = new RangeNode<float>(0.33f, 0, 1f);
     public RangeNode<float> CropRotationT3UpgradeChance { get; set; } = new RangeNode<float>(0.33f, 0, 1f);
+    public RangeNode<int> MaxPermutations { get; set; } = new RangeNode<int>(10000, 0, 100000);
+
 }
