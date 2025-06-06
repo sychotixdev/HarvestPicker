@@ -140,7 +140,19 @@ namespace HarvestPicker
                 .OrderBy(x => x.EntityHash)
                 .ToList();
 
-            return JsonConvert.SerializeObject(sortedData);
+            // Create hash-based key instead of JSON
+            var hash = new HashCode();
+            foreach (var item in sortedData)
+            {
+                hash.Add(item.EntityHash);
+                hash.Add(item.Type);
+                hash.Add(item.T1);
+                hash.Add(item.T2);
+                hash.Add(item.T3);
+                hash.Add(item.T4);
+            }
+
+            return hash.ToHashCode().ToString();
         }
 
         public void ClearCache()
