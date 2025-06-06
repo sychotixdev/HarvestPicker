@@ -27,8 +27,8 @@ namespace HarvestPicker
         }
 
         public (double Value, List<Entity> Sequence) CalculateBestHarvestSequence(
-            List<(SeedData Data, Entity Entity)> remaining,
-            double chanceToNotWither)
+    List<(SeedData Data, Entity Entity)> remaining,
+    double chanceToNotWither)
         {
             if (!remaining.Any()) return (0, new List<Entity>());
 
@@ -54,29 +54,47 @@ namespace HarvestPicker
                 int pairIndex = baseRemaining.FindIndex(x => x.Entity == paired);
                 bool hasPaired = pairIndex >= 0;
 
+                // Wilted branch
                 var wiltedRemaining = baseRemaining
                     .Where(x => !hasPaired || x.Entity != paired)
-                    .Select(x => (_upgradeFunc(x.Data, chosenData.Type), x.Entity))
+                    .Select(x =>
+                    {
+                        var upgraded = x.Data.Type == chosenData.Type
+                            ? x.Data
+                            : _upgradeFunc(x.Data, chosenData.Type);
+                        return (upgraded, x.Entity);
+                    })
                     .ToList();
 
                 var (wiltValue, wiltSequence) = CalculateBestHarvestSequence(wiltedRemaining, chanceToNotWither);
                 double expectedWilt = valueChosen + wiltValue;
 
                 double totalExpected = (1 - chanceToNotWither) * expectedWilt;
-                List<Entity> bestSubsequence = new List<Entity>(wiltSequence);
+                List<Entity> sequenceToUse = new List<Entity> { chosenEntity };
+                sequenceToUse.AddRange(wiltSequence);
 
-                if (hasPaired)
+                // Survival branch
+                if (hasPaired && chanceToNotWither > 0)
                 {
                     var survivingPair = baseRemaining[pairIndex];
+
                     var survivedRemaining = baseRemaining
                         .Where((_, idx) => idx != pairIndex)
-                        .Select(x => (_upgradeFunc(x.Data, chosenData.Type), x.Entity))
+                        .Select(x =>
+                        {
+                            var upgraded = x.Data.Type == chosenData.Type
+                                ? x.Data
+                                : _upgradeFunc(x.Data, chosenData.Type);
+                            return (upgraded, x.Entity);
+                        })
                         .ToList();
 
-                    // Only upgrade crops of different color (type) than chosen
-                    survivedRemaining.Add((_upgradeFunc(survivingPair.Data, chosenData.Type), survivingPair.Entity));
+                    // Apply upgrade to the surviving paired crop
+                    var upgradedSurvivingPair = survivingPair.Data.Type == chosenData.Type
+                        ? survivingPair.Data
+                        : _upgradeFunc(survivingPair.Data, chosenData.Type);
+                    survivedRemaining.Add((upgradedSurvivingPair, survivingPair.Entity));
 
-                    // Compute upper bound assuming this branch survives
                     string surviveKey = CreateCacheKey(survivedRemaining);
                     if (_memoCache.TryGetValue(surviveKey, out var surviveMemo))
                     {
@@ -88,21 +106,18 @@ namespace HarvestPicker
                     var (surviveValue, surviveSequence) = CalculateBestHarvestSequence(survivedRemaining, chanceToNotWither);
                     double expectedSurvive = valueChosen + surviveValue;
 
-                    totalExpected += chanceToNotWither * expectedSurvive;
-
-                    if (totalExpected > bestValue)
+                    double combinedExpected = totalExpected + (chanceToNotWither * expectedSurvive);
+                    if (combinedExpected > bestValue)
                     {
-                        bestValue = totalExpected;
+                        bestValue = combinedExpected;
                         bestSequence = new List<Entity> { chosenEntity };
                         bestSequence.AddRange(surviveSequence);
                     }
                 }
-
-                if (!hasPaired && expectedWilt > bestValue)
+                else if (totalExpected > bestValue)
                 {
-                    bestValue = expectedWilt;
-                    bestSequence = new List<Entity> { chosenEntity };
-                    bestSequence.AddRange(wiltSequence);
+                    bestValue = totalExpected;
+                    bestSequence = sequenceToUse;
                 }
             }
 
