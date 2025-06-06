@@ -265,30 +265,20 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                 var chanceToNotWither = GameController.IngameState.Data.MapStats
                     .GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct) / 100.0;
 
-                // Limit permutations to prevent performance issues
-                var maxPermutations = seedPlots.Count switch
-                {
-                    <= 4 => int.MaxValue, // Small enough to try all
-                    5 => 120,             // 5! = 120
-                    6 => 720,             // 6! = 720 
-                    7 => 5040,            // 7! = 5040
-                    8 => 40320,            // 8! = 40320
-                    _ => 3628800             // 10! = 3628800
-                };
-
                 double maxExpectedValue = double.NegativeInfinity;
                 List<Entity> bestSequence = null;
                 int permutationCount = 0;
 
-                foreach (var permutation in seedPlots.Permutations())
+                // Use prioritized permutations instead of random permutations
+                foreach (var permutation in GeneratePrioritizedPermutations(seedPlots, irrigatorPairs))
                 {
-                    if (++permutationCount > maxPermutations)
+                    if (++permutationCount > Settings.MaxPermutations)
                     {
-                        Log($"Reached permutation limit of {maxPermutations} for {seedPlots.Count} crops");
+                        Log($"Reached permutation limit of {Settings.MaxPermutations} for {seedPlots.Count} crops");
                         break;
                     }
 
-                    var result = _harvestCalculator.CalculateBestHarvestSequence(permutation.ToList(), chanceToNotWither);
+                    var result = _harvestCalculator.CalculateBestHarvestSequence(permutation, chanceToNotWither);
                     if (result.Value > maxExpectedValue)
                     {
                         maxExpectedValue = result.Value;
@@ -413,6 +403,126 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         var textPosition = GameController.IngameState.Camera.WorldToScreen(e.PosNum);
         Graphics.DrawBox(textPosition, textPosition + Graphics.MeasureText(text), Color.Black);
         Graphics.DrawText(text, textPosition, color);
+    }
+
+    // Add this method to your HarvestPicker class
+    private double CalculatePairPriority(List<(SeedData Data, Entity Entity)> seedPlots, Entity entity1, Entity entity2)
+    {
+        // Count crops by color/type
+        var colorCounts = seedPlots.GroupBy(x => x.Data.Type).ToDictionary(g => g.Key, g => g.Count());
+
+        // Calculate weighted value for entity1
+        var data1 = seedPlots.First(x => x.Entity == entity1).Data;
+        var value1 = CalculateIrrigatorValue(data1) * colorCounts[data1.Type];
+
+        double totalValue = value1;
+
+        // Add weighted value for entity2 if it exists
+        if (entity2 != null)
+        {
+            var data2 = seedPlots.First(x => x.Entity == entity2).Data;
+            var value2 = CalculateIrrigatorValue(data2) * colorCounts[data2.Type];
+            totalValue += value2;
+            totalValue /= 2; // Average for the pair
+        }
+
+        return totalValue;
+    }
+
+    private List<Entity> GeneratePrioritizedStartingSequence(
+        List<(SeedData Data, Entity Entity)> seedPlots,
+        List<((Entity, double), (Entity, double))> irrigatorPairs)
+    {
+        var sequence = new List<Entity>();
+        var usedEntities = new HashSet<Entity>();
+
+        // Create priority list for pairs (lowest priority first)
+        var prioritizedPairs = irrigatorPairs
+            .Select(pair => new
+            {
+                Entity1 = pair.Item1.Item1,
+                Entity2 = pair.Item2.Item1,
+                Priority = CalculatePairPriority(seedPlots, pair.Item1.Item1, pair.Item2.Item1)
+            })
+            .OrderBy(x => x.Priority) // Lowest priority (value) first
+            .ToList();
+
+        // Add entities from pairs in priority order
+        foreach (var pair in prioritizedPairs)
+        {
+            if (!usedEntities.Contains(pair.Entity1))
+            {
+                sequence.Add(pair.Entity1);
+                usedEntities.Add(pair.Entity1);
+            }
+
+            if (pair.Entity2 != null && !usedEntities.Contains(pair.Entity2))
+            {
+                sequence.Add(pair.Entity2);
+                usedEntities.Add(pair.Entity2);
+            }
+        }
+
+        // Add any remaining entities that weren't in pairs
+        foreach (var plot in seedPlots)
+        {
+            if (!usedEntities.Contains(plot.Entity))
+            {
+                sequence.Add(plot.Entity);
+                usedEntities.Add(plot.Entity);
+            }
+        }
+
+        return sequence;
+    }
+
+    private IEnumerable<List<(SeedData Data, Entity Entity)>> GeneratePrioritizedPermutations(
+        List<(SeedData Data, Entity Entity)> seedPlots,
+        List<((Entity, double), (Entity, double))> irrigatorPairs)
+    {
+        var prioritizedSequence = GeneratePrioritizedStartingSequence(seedPlots, irrigatorPairs);
+
+        // Convert entity sequence back to (SeedData, Entity) format
+        var prioritizedSeedPlots = prioritizedSequence
+            .Select(entity => seedPlots.First(plot => plot.Entity == entity))
+            .ToList();
+
+        // Yield the prioritized sequence first
+        yield return prioritizedSeedPlots;
+
+        // Then generate other permutations starting from the prioritized base
+        // This gives preference to sequences that start with low-priority (low-value) crops
+        foreach (var permutation in GeneratePermutationsStartingWith(prioritizedSeedPlots))
+        {
+            yield return permutation;
+        }
+    }
+
+    private IEnumerable<List<T>> GeneratePermutationsStartingWith<T>(List<T> baseSequence)
+    {
+        // Generate permutations but bias toward keeping the first few elements in place
+        var count = baseSequence.Count;
+
+        // Start with the exact sequence
+        yield return new List<T>(baseSequence);
+
+        // Generate permutations with increasing randomness
+        for (int swapDistance = 1; swapDistance < count; swapDistance++)
+        {
+            for (int i = 0; i < count - swapDistance; i++)
+            {
+                var permuted = new List<T>(baseSequence);
+                // Swap elements that are swapDistance apart
+                (permuted[i], permuted[i + swapDistance]) = (permuted[i + swapDistance], permuted[i]);
+                yield return permuted;
+            }
+        }
+
+        // Fall back to regular permutations for completeness
+        foreach (var permutation in baseSequence.Permutations().Skip(1)) // Skip first as we already yielded it
+        {
+            yield return permutation.ToList();
+        }
     }
 
     public override void Render()
