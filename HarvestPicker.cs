@@ -28,6 +28,8 @@ public class HarvestPrices
     public double WhiteJuiceValue;
 }
 
+public record SeedData(int Type, float T1Plants, float T2Plants, float T3Plants, float T4Plants);
+
 public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
 {
     public override bool Initialise()
@@ -43,8 +45,10 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
     private List<((Entity, double), (Entity, double))> _irrigatorPairs;
     private List<Entity> _cropRotationPath;
     private double _cropRotationValue;
-    private HashSet<(SeedData, SeedData)> _lastSeedData;
+    private HashSet<SeedData> _lastSeedData;
     private string CachePath => Path.Join(ConfigDirectory, "pricecache.json");
+    // Add this field to your HarvestPicker class
+    private MemoizedHarvestCalculator _harvestCalculator;
 
     public override void AreaChange(AreaInstance area)
     {
@@ -52,6 +56,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         _cropRotationPath = null;
         _cropRotationValue = 0;
         _irrigatorPairs = [];
+        _harvestCalculator?.ClearCache();
         Settings.League.Values = (Settings.League.Values ?? []).Union([PlayerLeague, "Standard", "Hardcore"]).Where(x => x != null).ToList();
     }
 
@@ -201,6 +206,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             .Where(x => x.Path == "Metadata/MiscellaneousObjects/Harvest/Extractor" &&
                         x.TryGetComponent<StateMachine>(out var stateMachine) &&
                         stateMachine.States.FirstOrDefault(s => s.Name == "current_state")?.Value == 0).ToList();
+
         var irrigatorPairs = new List<((Entity, double), (Entity, double))>();
         while (irrigators.LastOrDefault() is { } entity1)
         {
@@ -219,16 +225,27 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
 
         _irrigatorPairs = irrigatorPairs;
 
+        // Build pair lookup dictionary
+        var pairLookup = new Dictionary<Entity, Entity>();
+        foreach (var (a, b) in _irrigatorPairs)
+        {
+            if (a.Item1 != null && b.Item1 != null)
+            {
+                pairLookup[a.Item1] = b.Item1;
+                pairLookup[b.Item1] = a.Item1;
+            }
+        }
+
         if (GameController.IngameState.Data.MapStats.GetValueOrDefault(
                 GameStat.MapHarvestSeedsOfOtherColoursHaveChanceToUpgradeOnCompletingPlot) != 0)
         {
-            //crop rotation with weighted risk calculation
-            List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> irrigatorSeedDataPairs =
-                irrigatorPairs.Select(p => (
-                        (ExtractSeedData(p.Item1.Item1), p.Item1.Item1),
-                        (p.Item2.Item1 != null ? ExtractSeedData(p.Item2.Item1) : null, p.Item2.Item1)))
-                    .ToList();
-            var currentSet = irrigatorSeedDataPairs.Select(x => (x.Plot1.Data, x.Plot2.Data)).ToHashSet();
+            List<(SeedData Data, Entity Entity)> seedPlots = irrigatorPairs.SelectMany(p => new[]
+            {
+            (p.Item1.Item1 != null ? ExtractSeedData(p.Item1.Item1) : null, p.Item1.Item1),
+            (p.Item2.Item1 != null ? ExtractSeedData(p.Item2.Item1) : null, p.Item2.Item1)
+        }).Where(t => t.Item1 != null && t.Item2 != null).ToList();
+
+            var currentSet = seedPlots.Select(x => x.Data).ToHashSet();
             if (_lastSeedData == null || !_lastSeedData.SetEquals(currentSet))
             {
                 _cropRotationPath = null;
@@ -242,191 +259,55 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                         source.T3Plants * (1 - Settings.CropRotationT3UpgradeChance) + source.T2Plants * Settings.CropRotationT2UpgradeChance,
                         source.T4Plants + source.T3Plants * Settings.CropRotationT3UpgradeChance);
 
-                double maxExpectedValue = double.NegativeInfinity;
-                List<Entity> selectedPath = null;
+                // Create calculator with cache - clear any existing cache
+                _harvestCalculator = new MemoizedHarvestCalculator(Upgrade, pairLookup, this);
 
-                foreach (var pairPermutation in irrigatorSeedDataPairs.Permutations())
+                var chanceToNotWither = GameController.IngameState.Data.MapStats
+                    .GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct) / 100.0;
+
+                // Limit permutations to prevent performance issues
+                var maxPermutations = seedPlots.Count switch
                 {
-                    var expectedValue = CalculateExpectedValueForPath(pairPermutation.ToList(), Upgrade);
-                    if (expectedValue > maxExpectedValue)
+                    <= 4 => int.MaxValue, // Small enough to try all
+                    5 => 120,             // 5! = 120, try all
+                    6 => 720,             // 6! = 720, try all  
+                    7 => 5040,            // 7! = 5040, limit to 1000
+                    8 => 40320,            // 8! = 40320, limit to 2000
+                    _ => 100000             // 9+ crops, limit heavily
+                };
+
+                double maxExpectedValue = double.NegativeInfinity;
+                List<Entity> bestSequence = null;
+                int permutationCount = 0;
+
+                foreach (var permutation in seedPlots.Permutations())
+                {
+                    if (++permutationCount > maxPermutations)
                     {
-                        maxExpectedValue = expectedValue;
-                        selectedPath = GetOptimalChoicesForPath(pairPermutation.ToList(), Upgrade);
+                        Log($"Reached permutation limit of {maxPermutations} for {seedPlots.Count} crops");
+                        break;
+                    }
+
+                    var result = _harvestCalculator.CalculateBestHarvestSequence(permutation.ToList(), chanceToNotWither);
+                    if (result.Value > maxExpectedValue)
+                    {
+                        maxExpectedValue = result.Value;
+                        bestSequence = result.Sequence;
                     }
                 }
 
-                _cropRotationPath = selectedPath;
+                _cropRotationPath = bestSequence;
                 _cropRotationValue = maxExpectedValue;
                 _lastSeedData = currentSet;
+
+                // Log performance statistics
+                _harvestCalculator?.LogCacheStats(Log);
+                Log($"Processed {permutationCount} permutations for {seedPlots.Count} crops. Best value: {maxExpectedValue:F1}");
             }
         }
 
         return null;
     }
-
-    /// <summary>
-    /// Calculate the expected value for a given path considering the probability of crops not wilting
-    /// </summary>
-    private double CalculateExpectedValueForPath(
-        List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> path,
-        Func<SeedData, int, SeedData> upgradeFunc)
-    {
-        return CalculateExpectedValueRecursive(path, 0, upgradeFunc);
-    }
-
-    /// <summary>
-    /// Recursively calculate expected value considering all possible outcomes
-    /// </summary>
-    private double CalculateExpectedValueRecursive(
-        List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> remainingPath,
-        int currentIndex,
-        Func<SeedData, int, SeedData> upgradeFunc)
-    {
-        if (currentIndex >= remainingPath.Count)
-            return 0;
-
-        var currentPair = remainingPath[currentIndex];
-
-        // If there's only one plot in this pair, we must choose it
-        if (currentPair.Plot2.Data == null)
-        {
-            var chosenValue = CalculateIrrigatorValue(currentPair.Plot1.Data);
-            var upgradedPath = ApplyUpgradeToRemainingPath(remainingPath, currentIndex + 1, currentPair.Plot1.Data.Type, upgradeFunc);
-            var futureValue = CalculateExpectedValueRecursive(upgradedPath, currentIndex + 1, upgradeFunc);
-            return chosenValue + futureValue;
-        }
-
-        // Calculate values for both choices
-        var plot1Value = CalculateIrrigatorValue(currentPair.Plot1.Data);
-        var plot2Value = CalculateIrrigatorValue(currentPair.Plot2.Data);
-
-        // Calculate expected values for choosing plot1
-        var upgradedPath1 = ApplyUpgradeToRemainingPath(remainingPath, currentIndex + 1, currentPair.Plot1.Data.Type, upgradeFunc);
-        var futureValue1Normal = CalculateExpectedValueRecursive(upgradedPath1, currentIndex + 1, upgradeFunc);
-
-        // For the bonus case (plot2 doesn't wilt), we harvest plot2 next with upgrades from plot1
-        var plot2AfterPlot1Upgrade = upgradeFunc(currentPair.Plot2.Data, currentPair.Plot1.Data.Type);
-        var plot2UpgradedValue = CalculateIrrigatorValue(plot2AfterPlot1Upgrade);
-        var pathAfterBothHarvests = ApplyUpgradeToRemainingPath(upgradedPath1, currentIndex + 1, plot2AfterPlot1Upgrade.Type, upgradeFunc);
-        var futureValue1WithBonus = plot2UpgradedValue + CalculateExpectedValueRecursive(pathAfterBothHarvests, currentIndex + 1, upgradeFunc);
-
-        // Calculate expected values for choosing plot2
-        var upgradedPath2 = ApplyUpgradeToRemainingPath(remainingPath, currentIndex + 1, currentPair.Plot2.Data.Type, upgradeFunc);
-        var futureValue2Normal = CalculateExpectedValueRecursive(upgradedPath2, currentIndex + 1, upgradeFunc);
-
-        // For the bonus case (plot1 doesn't wilt), we harvest plot1 next with upgrades from plot2
-        var plot1AfterPlot2Upgrade = upgradeFunc(currentPair.Plot1.Data, currentPair.Plot2.Data.Type);
-        var plot1UpgradedValue = CalculateIrrigatorValue(plot1AfterPlot2Upgrade);
-        var pathAfterBothHarvests2 = ApplyUpgradeToRemainingPath(upgradedPath2, currentIndex + 1, plot1AfterPlot2Upgrade.Type, upgradeFunc);
-        var futureValue2WithBonus = plot1UpgradedValue + CalculateExpectedValueRecursive(pathAfterBothHarvests2, currentIndex + 1, upgradeFunc);
-
-        // Calculate expected values considering wilt probability
-        var chanceToNotWither = (1.0 * GameController.IngameState.Data.MapStats.GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct)) / 100;
-        var wiltChance = 1.0 - chanceToNotWither;
-        var expectedValue1 = plot1Value + (wiltChance * futureValue1Normal) + (chanceToNotWither * futureValue1WithBonus);
-        var expectedValue2 = plot2Value + (wiltChance * futureValue2Normal) + (chanceToNotWither * futureValue2WithBonus);
-
-        return Math.Max(expectedValue1, expectedValue2);
-    }
-
-    /// <summary>
-    /// Get the optimal choices for a given path
-    /// </summary>
-    private List<Entity> GetOptimalChoicesForPath(
-        List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> path,
-        Func<SeedData, int, SeedData> upgradeFunc)
-    {
-        var choices = new List<Entity>();
-        var currentPath = path.ToList();
-
-        for (int i = 0; i < path.Count; i++)
-        {
-            var currentPair = currentPath[i];
-
-            if (currentPair.Plot2.Data == null)
-            {
-                choices.Add(currentPair.Plot1.Entity);
-                continue;
-            }
-
-            // Calculate expected values for both choices
-            var plot1Value = CalculateIrrigatorValue(currentPair.Plot1.Data);
-            var plot2Value = CalculateIrrigatorValue(currentPair.Plot2.Data);
-
-            // Calculate expected values for choosing plot1
-            var upgradedPath1 = ApplyUpgradeToRemainingPath(currentPath, i + 1, currentPair.Plot1.Data.Type, upgradeFunc);
-            var futureValue1Normal = CalculateExpectedValueRecursive(upgradedPath1, i + 1, upgradeFunc);
-
-            // For bonus case: harvest plot2 after plot1 with upgrades
-            var plot2AfterPlot1Upgrade = upgradeFunc(currentPair.Plot2.Data, currentPair.Plot1.Data.Type);
-            var plot2UpgradedValue = CalculateIrrigatorValue(plot2AfterPlot1Upgrade);
-            var pathAfterBothHarvests = ApplyUpgradeToRemainingPath(upgradedPath1, i + 1, plot2AfterPlot1Upgrade.Type, upgradeFunc);
-            var futureValue1WithBonus = plot2UpgradedValue + CalculateExpectedValueRecursive(pathAfterBothHarvests, i + 1, upgradeFunc);
-
-            // Calculate expected values for choosing plot2
-            var upgradedPath2 = ApplyUpgradeToRemainingPath(currentPath, i + 1, currentPair.Plot2.Data.Type, upgradeFunc);
-            var futureValue2Normal = CalculateExpectedValueRecursive(upgradedPath2, i + 1, upgradeFunc);
-
-            // For bonus case: harvest plot1 after plot2 with upgrades
-            var plot1AfterPlot2Upgrade = upgradeFunc(currentPair.Plot1.Data, currentPair.Plot2.Data.Type);
-            var plot1UpgradedValue = CalculateIrrigatorValue(plot1AfterPlot2Upgrade);
-            var pathAfterBothHarvests2 = ApplyUpgradeToRemainingPath(upgradedPath2, i + 1, plot1AfterPlot2Upgrade.Type, upgradeFunc);
-            var futureValue2WithBonus = plot1UpgradedValue + CalculateExpectedValueRecursive(pathAfterBothHarvests2, i + 1, upgradeFunc);
-
-            var chanceToNotWither = (1.0 * GameController.IngameState.Data.MapStats.GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct)) / 100;
-            var wiltChance = 1.0 - chanceToNotWither;
-            var expectedValue1 = plot1Value + (wiltChance * futureValue1Normal) + (chanceToNotWither * futureValue1WithBonus);
-            var expectedValue2 = plot2Value + (wiltChance * futureValue2Normal) + (chanceToNotWither * futureValue2WithBonus);
-
-            if (expectedValue1 >= expectedValue2)
-            {
-                choices.Add(currentPair.Plot1.Entity);
-                currentPath = upgradedPath1;
-            }
-            else
-            {
-                choices.Add(currentPair.Plot2.Entity);
-                currentPath = upgradedPath2;
-            }
-        }
-
-        return choices;
-    }
-
-    /// <summary>
-    /// Apply upgrade effects to the remaining path based on the chosen crop type
-    /// </summary>
-    private List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> ApplyUpgradeToRemainingPath(
-        List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)> originalPath,
-        int startIndex,
-        int upgradeType,
-        Func<SeedData, int, SeedData> upgradeFunc)
-    {
-        var upgradedPath = new List<((SeedData Data, Entity Entity) Plot1, (SeedData Data, Entity Entity) Plot2)>();
-
-        for (int i = 0; i < originalPath.Count; i++)
-        {
-            if (i < startIndex)
-            {
-                upgradedPath.Add(originalPath[i]);
-            }
-            else
-            {
-                var originalPair = originalPath[i];
-                var upgradedPair = (
-                    (upgradeFunc(originalPair.Plot1.Data, upgradeType), originalPair.Plot1.Entity),
-                    originalPair.Plot2.Data != null ?
-                        (upgradeFunc(originalPair.Plot2.Data, upgradeType), originalPair.Plot2.Entity) :
-                        (null, originalPair.Plot2.Entity)
-                );
-                upgradedPath.Add(upgradedPair);
-            }
-        }
-
-        return upgradedPath;
-    }
-
-    private record SeedData(int Type, float T1Plants, float T2Plants, float T3Plants, float T4Plants);
 
     private SeedData ExtractSeedData(Entity e)
     {
@@ -452,7 +333,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             seedsByTier[4].Sum(x => x.Count));
     }
 
-    private double CalculateIrrigatorValue(SeedData data)
+    public double CalculateIrrigatorValue(SeedData data)
     {
         var prices = Prices;
         if (prices == null)
@@ -474,7 +355,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                (Settings.SeedsPerT4Plant * typeToPrice + Settings.T4PlantWhiteSeedChance * prices.WhiteJuiceValue) * data.T4Plants;
     }
 
-    private double CalculateIrrigatorValue(Entity e)
+    public double CalculateIrrigatorValue(Entity e)
     {
         var prices = Prices;
         if (prices == null)
