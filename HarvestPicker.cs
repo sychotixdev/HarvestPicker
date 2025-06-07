@@ -56,7 +56,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         _cropRotationPath = null;
         _cropRotationValue = 0;
         _irrigatorPairs = [];
-        _harvestCalculator?.ClearCache();
+        _harvestCalculator = null;
         Settings.League.Values = (Settings.League.Values ?? []).Union([PlayerLeague, "Standard", "Hardcore"]).Where(x => x != null).ToList();
     }
 
@@ -193,7 +193,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
     }
 
 
-    private void Log(string message)
+    public void Log(string message)
     {
         LogMessage($"[HarvestPicker] {message}");
     }
@@ -241,9 +241,9 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         {
             List<(SeedData Data, Entity Entity)> seedPlots = irrigatorPairs.SelectMany(p => new[]
             {
-            (p.Item1.Item1 != null ? ExtractSeedData(p.Item1.Item1) : null, p.Item1.Item1),
-            (p.Item2.Item1 != null ? ExtractSeedData(p.Item2.Item1) : null, p.Item2.Item1)
-        }).Where(t => t.Item1 != null && t.Item2 != null).ToList();
+    (p.Item1.Item1 != null ? ExtractSeedData(p.Item1.Item1) : null, p.Item1.Item1),
+    (p.Item2.Item1 != null ? ExtractSeedData(p.Item2.Item1) : null, p.Item2.Item1)
+}).Where(t => t.Item1 != null && t.Item2 != null).ToList();
 
             var currentSet = seedPlots.Select(x => x.Data).ToHashSet();
             if (_lastSeedData == null || !_lastSeedData.SetEquals(currentSet))
@@ -259,40 +259,25 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                         source.T3Plants * (1 - Settings.CropRotationT3UpgradeChance) + source.T2Plants * Settings.CropRotationT2UpgradeChance,
                         source.T4Plants + source.T3Plants * Settings.CropRotationT3UpgradeChance);
 
-                // Create calculator with cache - clear any existing cache
                 _harvestCalculator = new MemoizedHarvestCalculator(Upgrade, pairLookup, this);
 
                 var chanceToNotWither = GameController.IngameState.Data.MapStats
                     .GetValueOrDefault(GameStat.MapHarvestChanceForOtherPlotToNotWitherPct) / 100.0;
 
-                double maxExpectedValue = double.NegativeInfinity;
-                List<Entity> bestSequence = null;
-                int permutationCount = 0;
+                Log($"Starting harvest sequence calculation for {seedPlots.Count} crops");
 
-                // Use prioritized permutations instead of random permutations
-                foreach (var permutation in GeneratePrioritizedPermutations(seedPlots, irrigatorPairs))
-                {
-                    if (++permutationCount > Settings.MaxPermutations)
-                    {
-                        Log($"Reached permutation limit of {Settings.MaxPermutations} for {seedPlots.Count} crops");
-                        break;
-                    }
+                // Single calculation using dynamic programming
+                var result = _harvestCalculator.CalculateBestHarvestSequence(seedPlots, chanceToNotWither);
 
-                    var result = _harvestCalculator.CalculateBestHarvestSequence(permutation, chanceToNotWither);
-                    if (result.Value > maxExpectedValue)
-                    {
-                        maxExpectedValue = result.Value;
-                        bestSequence = result.Sequence;
-                    }
-                }
-
-                _cropRotationPath = bestSequence;
-                _cropRotationValue = maxExpectedValue;
+                _cropRotationPath = result.Sequence;
+                _cropRotationValue = result.Value;
                 _lastSeedData = currentSet;
 
                 // Log performance statistics
                 _harvestCalculator?.LogCacheStats(Log);
-                Log($"Processed {permutationCount} permutations for {seedPlots.Count} crops. Best value: {maxExpectedValue:F1}");
+                _harvestCalculator?.LogDetailedStats(Log);
+
+                Log($"Calculated optimal sequence for {seedPlots.Count} crops. Best value: {result.Value:F1}");
             }
         }
 
@@ -403,141 +388,6 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         var textPosition = GameController.IngameState.Camera.WorldToScreen(e.PosNum);
         Graphics.DrawBox(textPosition, textPosition + Graphics.MeasureText(text), Color.Black);
         Graphics.DrawText(text, textPosition, color);
-    }
-
-    // Add this method to your HarvestPicker class
-    private double CalculatePairPriority(List<(SeedData Data, Entity Entity)> seedPlots, Entity entity1, Entity entity2)
-    {
-        // Count crops by color/type
-        var colorCounts = seedPlots.GroupBy(x => x.Data.Type).ToDictionary(g => g.Key, g => g.Count());
-
-        // Calculate weighted value for entity1
-        var data1 = seedPlots.First(x => x.Entity == entity1).Data;
-        var value1 = CalculateIrrigatorValue(data1) * colorCounts[data1.Type];
-
-        double totalValue = value1;
-
-        // Add weighted value for entity2 if it exists
-        if (entity2 != null)
-        {
-            var data2 = seedPlots.First(x => x.Entity == entity2).Data;
-            var value2 = CalculateIrrigatorValue(data2) * colorCounts[data2.Type];
-            totalValue += value2;
-            totalValue /= 2; // Average for the pair
-        }
-
-        return totalValue;
-    }
-
-    private List<Entity> GeneratePrioritizedStartingSequence(
-        List<(SeedData Data, Entity Entity)> seedPlots,
-        List<((Entity, double), (Entity, double))> irrigatorPairs)
-    {
-        var sequence = new List<Entity>();
-        var usedEntities = new HashSet<Entity>();
-
-        // Create priority list for pairs (lowest priority first)
-        var prioritizedPairs = irrigatorPairs
-            .Select(pair => new
-            {
-                Entity1 = pair.Item1.Item1,
-                Entity2 = pair.Item2.Item1,
-                Priority = CalculatePairPriority(seedPlots, pair.Item1.Item1, pair.Item2.Item1)
-            })
-            .OrderBy(x => x.Priority) // Lowest priority (value) first
-            .ToList();
-
-        // Add entities from pairs in priority order
-        foreach (var pair in prioritizedPairs)
-        {
-            if (!usedEntities.Contains(pair.Entity1))
-            {
-                sequence.Add(pair.Entity1);
-                usedEntities.Add(pair.Entity1);
-            }
-
-            if (pair.Entity2 != null && !usedEntities.Contains(pair.Entity2))
-            {
-                sequence.Add(pair.Entity2);
-                usedEntities.Add(pair.Entity2);
-            }
-        }
-
-        // Add any remaining entities that weren't in pairs
-        foreach (var plot in seedPlots)
-        {
-            if (!usedEntities.Contains(plot.Entity))
-            {
-                sequence.Add(plot.Entity);
-                usedEntities.Add(plot.Entity);
-            }
-        }
-
-        return sequence;
-    }
-
-    private IEnumerable<List<(SeedData Data, Entity Entity)>> GeneratePrioritizedPermutations(
-    List<(SeedData Data, Entity Entity)> seedPlots,
-    List<((Entity, double), (Entity, double))> irrigatorPairs)
-    {
-        // Get the prioritized sequence of entities (this is our starting point order)
-        var prioritizedSequence = GeneratePrioritizedStartingSequence(seedPlots, irrigatorPairs);
-
-        // Convert to lookup for quick access
-        var entityToSeedPlot = seedPlots.ToDictionary(plot => plot.Entity, plot => plot);
-
-        int permutationCount = 0;
-
-        // Iterate through each entity in priority order as a starting point
-        foreach (var startingEntity in prioritizedSequence)
-        {
-            Log($"Evaluating sequence for {startingEntity.Address} At {permutationCount}/{Settings.MaxPermutations.Value} permutations.");
-
-            // Get the remaining entities (all except the starting one)
-            var remainingEntities = prioritizedSequence.Where(e => e != startingEntity).ToList();
-
-            // Generate all permutations that start with this entity
-            foreach (var remainingPermutation in GenerateAllPermutations(remainingEntities))
-            {
-                if (++permutationCount > Settings.MaxPermutations)
-                {
-                    Log($"Reached permutation limit of {Settings.MaxPermutations}");
-                    yield break; // Stop generating more permutations
-                }
-
-                // Build the complete sequence: starting entity + remaining permutation
-                var completeSequence = new List<Entity> { startingEntity };
-                completeSequence.AddRange(remainingPermutation);
-
-                // Convert back to (SeedData, Entity) format
-                var seedPlotSequence = completeSequence.Select(entity => entityToSeedPlot[entity]).ToList();
-
-                yield return seedPlotSequence;
-            }
-        }
-    }
-
-    // Helper method to generate all permutations of a list
-    private IEnumerable<List<T>> GenerateAllPermutations<T>(List<T> items)
-    {
-        if (items.Count <= 1)
-        {
-            yield return new List<T>(items);
-            yield break;
-        }
-
-        for (int i = 0; i < items.Count; i++)
-        {
-            var current = items[i];
-            var remaining = items.Where((item, index) => index != i).ToList();
-
-            foreach (var permutation in GenerateAllPermutations(remaining))
-            {
-                var result = new List<T> { current };
-                result.AddRange(permutation);
-                yield return result;
-            }
-        }
     }
 
     public override void Render()
