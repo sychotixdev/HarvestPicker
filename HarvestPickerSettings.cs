@@ -30,6 +30,8 @@ public class HarvestPickerSettings : ISettings
     public RangeNode<float> CropRotationT1UpgradeChance { get; set; } = new RangeNode<float>(0.33f, 0, 1f);
     public RangeNode<float> CropRotationT2UpgradeChance { get; set; } = new RangeNode<float>(0.33f, 0, 1f);
     public RangeNode<float> CropRotationT3UpgradeChance { get; set; } = new RangeNode<float>(0.33f, 0, 1f);
-    public RangeNode<int> MaxPermutations { get; set; } = new RangeNode<int>(10000, 0, 100000);
+    public RangeNode<int> MaxPermutations { get; set; } = new RangeNode<int>(50000, 0, 3628800);
+    public ToggleNode LogDetailedForCropRotation { get; set; } = new ToggleNode(false);
+
 
 }
