@@ -274,8 +274,11 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                 _lastSeedData = currentSet;
 
                 // Log performance statistics
-                _harvestCalculator?.LogCacheStats(Log);
-                _harvestCalculator?.LogDetailedStats(Log);
+                if (!Settings.LogDetailedForCropRotation.Value)
+                {
+                    _harvestCalculator?.LogCacheStats(Log);
+                    _harvestCalculator?.LogDetailedStats(Log);
+                }
 
                 Log($"Calculated optimal sequence for {seedPlots.Count} crops. Best value: {result.Value:F1}");
             }
