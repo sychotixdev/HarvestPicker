@@ -47,7 +47,7 @@ namespace HarvestPicker
 
             if (!remaining.Any())
             {
-                _harvestPicker.Log($"Depth {depth}: Reached base case (no remaining crops)");
+                //_harvestPicker.Log($"Depth {depth}: Reached base case (no remaining crops)");
                 return (0, new List<Entity>());
             }
 
@@ -55,12 +55,12 @@ namespace HarvestPicker
             if (_memoCache.TryGetValue(cacheKey, out var cachedResult))
             {
                 _cacheHits++;
-                _harvestPicker.Log($"Depth {depth}: Cache hit for {remaining.Count} remaining crops");
+                //_harvestPicker.Log($"Depth {depth}: Cache hit for {remaining.Count} remaining crops");
                 return cachedResult;
             }
             _cacheMisses++;
 
-            _harvestPicker.Log($"Depth {depth}: Exploring {remaining.Count} remaining crops, trying {remaining.Count} choices");
+            //_harvestPicker.Log($"Depth {depth}: Exploring {remaining.Count} remaining crops, trying {remaining.Count} choices");
 
             double bestValue = double.NegativeInfinity;
             List<Entity> bestSequence = null;
@@ -76,7 +76,7 @@ namespace HarvestPicker
                 int pairIndex = baseRemaining.FindIndex(x => x.Entity == paired);
                 bool hasPaired = pairIndex >= 0;
 
-                _harvestPicker.Log($"Depth {depth}: Trying choice {i + 1}/{remaining.Count} - Entity {chosenEntity.Address}, Value: {valueChosen:F1}, HasPair: {hasPaired}");
+                //_harvestPicker.Log($"Depth {depth}: Trying choice {i + 1}/{remaining.Count} - Entity {chosenEntity.Address}, Value: {valueChosen:F1}, HasPair: {hasPaired}");
 
                 string surviveKey = null;
                 double surviveValue = 0;
@@ -105,7 +105,7 @@ namespace HarvestPicker
                     }
                     else
                     {
-                        _harvestPicker.Log($"Depth {depth}: Survival branch has {survivedRemaining.Count} remaining crops");
+                       // _harvestPicker.Log($"Depth {depth}: Survival branch has {survivedRemaining.Count} remaining crops");
                         (surviveValue, surviveSequence) = CalculateBestHarvestSequence(survivedRemaining, chanceToNotWither, depth + 1);
 
                         // Cache the survival result
@@ -118,7 +118,7 @@ namespace HarvestPicker
                     {
                         choicesPruned++;
                         _totalPruningOccurred++;
-                        _harvestPicker.Log($"Depth {depth}: PRUNED choice {i + 1} - Best case survial possible: {valueChosen + surviveValue:F1} <= Best so far: {bestValue:F1}");
+                        //_harvestPicker.Log($"Depth {depth}: PRUNED choice {i + 1} - Best case survial possible: {valueChosen + surviveValue:F1} <= Best so far: {bestValue:F1}");
                         if (!disableOptimizations)
                             continue; // prune
                     }
@@ -136,7 +136,7 @@ namespace HarvestPicker
                     })
                     .ToList();
 
-                _harvestPicker.Log($"Depth {depth}: Wilted branch has {wiltedRemaining.Count} remaining crops");
+                //_harvestPicker.Log($"Depth {depth}: Wilted branch has {wiltedRemaining.Count} remaining crops");
                 var (wiltValue, wiltSequence) = CalculateBestHarvestSequence(wiltedRemaining, chanceToNotWither, depth + 1);
 
                 double wiltContribution = (1 - chanceToNotWither) * wiltValue;
@@ -159,13 +159,13 @@ namespace HarvestPicker
                 {
                     bestValue = totalExpected;
                     bestSequence = sequenceToUse;
-                    _harvestPicker.Log($"Depth {depth}: NEW BEST from choice {i + 1} (no pair): {bestValue:F1}");
+                    //_harvestPicker.Log($"Depth {depth}: NEW BEST from choice {i + 1} (no pair): {bestValue:F1}");
                 }
 
                 choicesTried++;
             }
 
-            _harvestPicker.Log($"Depth {depth}: Completed - Tried {choicesTried}/{remaining.Count} choices, Pruned: {choicesPruned}, Best: {bestValue:F1}");
+            //_harvestPicker.Log($"Depth {depth}: Completed - Tried {choicesTried}/{remaining.Count} choices, Pruned: {choicesPruned}, Best: {bestValue:F1}");
 
             var result = (bestValue, bestSequence);
             if (!disableOptimizations)
