@@ -21,15 +21,15 @@ public class HarvestPickerSettings : ISettings
     public ColorNode NeutralColor { get; set; } = new ColorNode(Color.Yellow);
     public ColorNode GoodColor { get; set; } = new ColorNode(Color.Green);
 
-    public RangeNode<int> SeedsPerT1Plant { get; set; } = new RangeNode<int>(0, 0, 300);
-    public RangeNode<int> SeedsPerT2Plant { get; set; } = new RangeNode<int>(5, 0, 300);
-    public RangeNode<int> SeedsPerT3Plant { get; set; } = new RangeNode<int>(100, 0, 300);
-    public RangeNode<int> SeedsPerT4Plant { get; set; } = new RangeNode<int>(500, 0, 900);
-    public RangeNode<float> T4PlantWhiteSeedChance { get; set; } = new RangeNode<float>(0.1f, 0, 1f);
+    public RangeNode<int> SeedsPerT1Plant { get; set; } = new RangeNode<int>(7, 0, 300);
+    public RangeNode<int> SeedsPerT2Plant { get; set; } = new RangeNode<int>(18, 0, 300);
+    public RangeNode<int> SeedsPerT3Plant { get; set; } = new RangeNode<int>(47, 0, 300);
+    public RangeNode<int> SeedsPerT4Plant { get; set; } = new RangeNode<int>(235, 0, 900);
+    public RangeNode<float> T4PlantWhiteSeedChance { get; set; } = new RangeNode<float>(0.12f, 0, 1f);
 
-    public RangeNode<float> CropRotationT1UpgradeChance { get; set; } = new RangeNode<float>(0.33f, 0, 1f);
-    public RangeNode<float> CropRotationT2UpgradeChance { get; set; } = new RangeNode<float>(0.33f, 0, 1f);
-    public RangeNode<float> CropRotationT3UpgradeChance { get; set; } = new RangeNode<float>(0.33f, 0, 1f);
+    public RangeNode<float> CropRotationT1UpgradeChance { get; set; } = new RangeNode<float>(0.25f, 0, 1f);
+    public RangeNode<float> CropRotationT2UpgradeChance { get; set; } = new RangeNode<float>(0.204f, 0, 1f);
+    public RangeNode<float> CropRotationT3UpgradeChance { get; set; } = new RangeNode<float>(0.035f, 0, 1f);
     public RangeNode<int> MaxPermutations { get; set; } = new RangeNode<int>(50000, 0, 3628800);
     public ToggleNode LogDetailedForCropRotation { get; set; } = new ToggleNode(false);
 
