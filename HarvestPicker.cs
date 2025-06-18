@@ -296,6 +296,12 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         }
 
         var seeds = harvest.Seeds;
+        if (seeds.Count == 0)
+        {
+            Log("Somehow an entity is being parsed with no seeds.");
+            return new SeedData(1, 0, 0, 0, 0);
+        }
+
         if (seeds.Any(x => x.Seed == null))
         {
             Log("Some seeds have no associated dat file");
